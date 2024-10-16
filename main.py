@@ -1,8 +1,9 @@
+import json
 import logging
 import os
+import re
 
 import cv2
-import openpyxl
 import pytesseract
 from PIL import Image
 
@@ -11,8 +12,27 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+# Regular expression patterns for extracting fields
+date_pattern = re.compile(
+    r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})|(\d{1,2} \w+ \d{4})|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+)
+number_pattern = re.compile(
+    r"(Transaction(?:\sID|\.? No\.?)|Reference ID)\s?:?\s?([\w\d]+)"
+)
+# Updated amount regex to handle negative values and special characters
+amount_pattern = re.compile(r"[—-]?\d{1,3}(?:,\d{3})*(?:\.\d{2})?\s?(MMK|Ks|Kyat)?")
+send_from_pattern = re.compile(r"(From|Sender Name|Send From)\s?:?\s?([A-Za-z\s]+)")
+send_to_pattern = re.compile(r"(To|Receiver Name|Send To)\s?:?\s?([A-Za-z\s]+)")
+notes_pattern = re.compile(r"(Notes|Purpose)\s?:?\s?(.+)")
+
 
 def extract_text_from_image(image_path):
+    """
+    Extracts text from an image using Tesseract OCR.
+
+    :param image_path: Path to the image file
+    :return: Extracted text as a string, or None if extraction fails
+    """
     try:
         # Read the image using OpenCV
         img = cv2.imread(image_path)
@@ -32,24 +52,59 @@ def extract_text_from_image(image_path):
         return None
 
 
-def save_to_excel(data, output_file):
-    try:
-        # Create a new workbook and select the active sheet
-        workbook = openpyxl.Workbook()
-        sheet = workbook.active
+def extract_transaction_details(text):
+    """
+    Extract key fields (transaction date, number, amount, sender, receiver, notes) from the given text.
 
-        # Write the data to the sheet
-        for row, line in enumerate(data.split("\n"), start=1):
-            sheet.cell(row=row, column=1, value=line)
+    :param text: Text extracted from an image
+    :return: Dictionary of extracted transaction details
+    """
+    details = {
+        "transaction_date": None,
+        "transaction_number": None,
+        "amount": None,
+        "send_from": None,
+        "send_to": None,
+        "notes": None,
+    }
 
-        # Save the workbook
-        workbook.save(output_file)
-    except Exception as e:
-        logging.error(f"Error saving to Excel file {output_file}: {str(e)}")
+    # Find and store each field using regex
+    date_match = date_pattern.search(text)
+    if date_match:
+        details["transaction_date"] = date_match.group(0)
+
+    number_match = number_pattern.search(text)
+    if number_match:
+        details["transaction_number"] = number_match.group(2)
+
+    # Improve the amount extraction, handling special characters and negative values
+    amount_match = amount_pattern.search(text)
+    if amount_match:
+        # Clean up special characters like "—"
+        details["amount"] = amount_match.group(0).replace("—", "-").strip()
+
+    send_from_match = send_from_pattern.search(text)
+    if send_from_match:
+        details["send_from"] = send_from_match.group(2).strip()
+
+    send_to_match = send_to_pattern.search(text)
+    if send_to_match:
+        details["send_to"] = send_to_match.group(2).strip()
+
+    notes_match = notes_pattern.search(text)
+    if notes_match:
+        details["notes"] = notes_match.group(2).strip()
+
+    return details
 
 
 def is_image_file(filename):
-    # List of accepted image extensions (case-insensitive)
+    """
+    Checks if a given file is an image based on the extension.
+
+    :param filename: Name of the file
+    :return: True if the file is an image, False otherwise
+    """
     valid_extensions = (".png", ".jpg", ".jpeg", ".tiff", ".bmp")
     return filename.lower().endswith(valid_extensions)
 
@@ -58,9 +113,8 @@ def main():
     # Directory containing the images
     image_dir = "dummy_data"
 
-    # Output Excel file
-    output_file = "output.xlsx"
-    all_extracted_text = ""
+    # Initialize a list to hold all transaction details
+    all_transaction_details = []
 
     # Process all images in the directory
     for filename in os.listdir(image_dir):
@@ -71,17 +125,28 @@ def main():
             extracted_text = extract_text_from_image(image_path)
 
             if extracted_text:
-                all_extracted_text += f"--- {filename} ---\n{extracted_text}\n\n"
                 logging.info(f"Successfully processed {filename}")
+                logging.info(f"Extracted text: {extracted_text}")
+
+                # Extract transaction details using regex
+                transaction_details = extract_transaction_details(extracted_text)
+                transaction_details["image_file"] = (
+                    filename  # Add filename for reference
+                )
+
+                # Append the extracted details to the list
+                all_transaction_details.append(transaction_details)
             else:
                 logging.warning(f"Failed to extract text from {filename}")
 
-    # Save all extracted text to Excel
-    if all_extracted_text:
-        save_to_excel(all_extracted_text, output_file)
-        logging.info(f"All processed text saved to {output_file}")
+    # Save all transaction details to a JSON file
+    if all_transaction_details:
+        output_json_file = "transaction_details.json"
+        with open(output_json_file, "w") as json_file:
+            json.dump(all_transaction_details, json_file, indent=4)
+        logging.info(f"All transaction details saved to {output_json_file}")
     else:
-        logging.warning("No text was extracted from any images.")
+        logging.warning("No transaction details were extracted from any images.")
 
 
 if __name__ == "__main__":
