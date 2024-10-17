@@ -26,6 +26,17 @@ This project is a Streamlit application designed to extract transaction details 
    pip install -r requirements.txt
    ```
 
+3. **Install Tesseract**:
+   - **Windows**: Download the installer from [Tesseract at UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki).
+   - **macOS**: Use Homebrew:
+     ```bash
+     brew install tesseract
+     ```
+   - **Linux**: Use apt-get:
+     ```bash
+     sudo apt-get install tesseract-ocr
+     ```
+
 ## Usage
 
 1. **Run the Streamlit app**:
