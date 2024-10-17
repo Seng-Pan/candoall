@@ -22,7 +22,7 @@ number_pattern = re.compile(
 # Updated amount regex to handle negative values and special characters
 amount_pattern = re.compile(r"[—-]?\d{1,3}(?:,\d{3})*(?:\.\d{2})?\s?(MMK|Ks|Kyat)?")
 send_from_pattern = re.compile(r"(From|Sender Name|Send From)\s?:?\s?([A-Za-z\s]+)")
-send_to_pattern = re.compile(r"(To|Receiver Name|Send To)\s?:?\s?([A-Za-z\s]+)")
+send_to_pattern = re.compile(r"(To|Receiver Name|Send To)\s?:?\s?([A-Za-z0-9\s]+)")
 notes_pattern = re.compile(r"(Notes|Purpose)\s?:?\s?(.+)")
 
 
@@ -69,7 +69,7 @@ def extract_transaction_details(text):
     }
 
     # Find and store each field using regex
-    date_match = date_pattern.search(text)
+    date_match: re.Match[str] | None = date_pattern.search(text)
     if date_match:
         details["transaction_date"] = date_match.group(0)
 
@@ -111,7 +111,7 @@ def is_image_file(filename):
 
 def main():
     # Directory containing the images
-    image_dir = "dummy_data"
+    image_dir = "dummy_data/all"
 
     # Initialize a list to hold all transaction details
     all_transaction_details = []
@@ -127,6 +127,7 @@ def main():
             if extracted_text:
                 logging.info(f"Successfully processed {filename}")
                 logging.info(f"Extracted text: {extracted_text}")
+                logging.info("-" * 50)
 
                 # Extract transaction details using regex
                 transaction_details = extract_transaction_details(extracted_text)
