@@ -1,10 +1,12 @@
-import json
+import io
 import logging
-import os
 import re
 
 import cv2
+import numpy as np
+import pandas as pd
 import pytesseract
+import streamlit as st
 from PIL import Image
 
 # Set up logging
@@ -19,36 +21,29 @@ date_pattern = re.compile(
 number_pattern = re.compile(
     r"(Transaction(?:\sID|\.? No\.?)|Reference ID)\s?:?\s?([\w\d]+)"
 )
-# Updated amount regex to handle negative values and special characters
 amount_pattern = re.compile(r"[—-]?\d{1,3}(?:,\d{3})*(?:\.\d{2})?\s?(MMK|Ks|Kyat)?")
 send_from_pattern = re.compile(r"(From|Sender Name|Send From)\s?:?\s?([A-Za-z\s]+)")
 send_to_pattern = re.compile(r"(To|Receiver Name|Send To)\s?:?\s?([A-Za-z0-9\s]+)")
 notes_pattern = re.compile(r"(Notes|Purpose)\s?:?\s?(.+)")
 
 
-def extract_text_from_image(image_path):
+def extract_text_from_image(image):
     """
     Extracts text from an image using Tesseract OCR.
 
-    :param image_path: Path to the image file
+    :param image: Image file
     :return: Extracted text as a string, or None if extraction fails
     """
     try:
-        # Read the image using OpenCV
-        img = cv2.imread(image_path)
-
-        if img is None:
-            raise ValueError(f"Failed to read image: {image_path}")
-
         # Convert the image to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # Use Tesseract to do OCR on the image
         text = pytesseract.image_to_string(Image.fromarray(gray))
 
         return text
     except Exception as e:
-        logging.error(f"Error processing image {image_path}: {str(e)}")
+        logging.error(f"Error processing image: {str(e)}")
         return None
 
 
@@ -69,7 +64,7 @@ def extract_transaction_details(text):
     }
 
     # Find and store each field using regex
-    date_match: re.Match[str] | None = date_pattern.search(text)
+    date_match = date_pattern.search(text)
     if date_match:
         details["transaction_date"] = date_match.group(0)
 
@@ -77,10 +72,8 @@ def extract_transaction_details(text):
     if number_match:
         details["transaction_number"] = number_match.group(2)
 
-    # Improve the amount extraction, handling special characters and negative values
     amount_match = amount_pattern.search(text)
     if amount_match:
-        # Clean up special characters like "—"
         details["amount"] = amount_match.group(0).replace("—", "-").strip()
 
     send_from_match = send_from_pattern.search(text)
@@ -98,56 +91,115 @@ def extract_transaction_details(text):
     return details
 
 
-def is_image_file(filename):
-    """
-    Checks if a given file is an image based on the extension.
-
-    :param filename: Name of the file
-    :return: True if the file is an image, False otherwise
-    """
-    valid_extensions = (".png", ".jpg", ".jpeg", ".tiff", ".bmp")
-    return filename.lower().endswith(valid_extensions)
-
-
 def main():
-    # Directory containing the images
-    image_dir = "dummy_data/all"
+    st.title("Transaction Details Extractor")
 
-    # Initialize a list to hold all transaction details
-    all_transaction_details = []
+    # Initialize session state for transaction details
+    if "all_transaction_details" not in st.session_state:
+        st.session_state.all_transaction_details = []
 
-    # Process all images in the directory
-    for filename in os.listdir(image_dir):
-        if is_image_file(filename):
-            image_path = os.path.join(image_dir, filename)
+    uploaded_files = st.file_uploader(
+        "Upload image files", accept_multiple_files=True, type=["png", "jpg", "jpeg"]
+    )
 
-            # Extract text from the image
-            extracted_text = extract_text_from_image(image_path)
+    # Track processed files to avoid duplicates
+    processed_files = {
+        detail["image_file"] for detail in st.session_state.all_transaction_details
+    }
 
-            if extracted_text:
-                logging.info(f"Successfully processed {filename}")
-                logging.info(f"Extracted text: {extracted_text}")
-                logging.info("-" * 50)
+    for uploaded_file in uploaded_files:
+        if uploaded_file.name not in processed_files:
+            try:
+                # Read the image file
+                image = Image.open(uploaded_file)
+                image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
-                # Extract transaction details using regex
-                transaction_details = extract_transaction_details(extracted_text)
-                transaction_details["image_file"] = (
-                    filename  # Add filename for reference
-                )
+                # Extract text from the image
+                extracted_text = extract_text_from_image(image_cv)
 
-                # Append the extracted details to the list
-                all_transaction_details.append(transaction_details)
-            else:
-                logging.warning(f"Failed to extract text from {filename}")
+                if extracted_text:
+                    # Extract transaction details using regex
+                    transaction_details = extract_transaction_details(extracted_text)
+                    transaction_details["image_file"] = uploaded_file.name
 
-    # Save all transaction details to a JSON file
-    if all_transaction_details:
-        output_json_file = "transaction_details.json"
-        with open(output_json_file, "w") as json_file:
-            json.dump(all_transaction_details, json_file, indent=4)
-        logging.info(f"All transaction details saved to {output_json_file}")
-    else:
-        logging.warning("No transaction details were extracted from any images.")
+                    # Append the extracted details to the session state list
+                    st.session_state.all_transaction_details.append(transaction_details)
+                else:
+                    st.warning(f"Failed to extract text from {uploaded_file.name}")
+            except Exception as e:
+                st.error(f"Error processing {uploaded_file.name}: {e}")
+
+    # Display all transaction details in a DataFrame with custom column names
+    if st.session_state.all_transaction_details:
+        df = pd.DataFrame(st.session_state.all_transaction_details)
+
+        # Reorder columns to have 'Amount' at the end
+        df = df[
+            [
+                "transaction_date",
+                "transaction_number",
+                "send_from",
+                "send_to",
+                "notes",
+                "image_file",
+                "amount",
+            ]
+        ]
+
+        # Rename columns for display
+        df.columns = [
+            "Transaction Date",
+            "Transaction Number",
+            "Sender",
+            "Receiver",
+            "Notes",
+            "Image File",
+            "Amount",
+        ]
+
+        # Convert 'Amount' to numeric, handling any non-numeric values
+        df["Amount"] = pd.to_numeric(
+            df["Amount"].replace("[^\d.]", "", regex=True), errors="coerce"
+        )
+
+        # Configure the DataFrame display with column_config
+        st.dataframe(
+            df,
+            column_config={
+                "Transaction Date": "Date",
+                "Transaction Number": "Number",
+                "Sender": "From",
+                "Receiver": "To",
+                "Notes": "Notes",
+                "Image File": "File",
+                "Amount": st.column_config.NumberColumn(
+                    "Amount",
+                    help="Transaction amount in currency",
+                    format="%.2f",  # Format to two decimal places
+                    min_value=0.0,  # Minimum value constraint
+                ),
+            },
+            hide_index=True,
+        )
+
+        # Calculate and display the total amount
+        total_amount = df["Amount"].sum()
+        st.write(f"**Total Amount:** {total_amount}")
+
+        # Export DataFrame to Excel
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
+            df.to_excel(writer, index=False, sheet_name="Transactions")
+
+        # Provide a download button for the Excel file
+        st.download_button(
+            label="Download Excel",
+            data=excel_buffer,
+            file_name="transaction_details.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        st.success("All transaction details have been extracted successfully.")
 
 
 if __name__ == "__main__":
